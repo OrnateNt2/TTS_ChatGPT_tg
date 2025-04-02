@@ -61,18 +61,19 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("Access denied.")
         return ConversationHandler.END
 
-    if data == "admin:broadcast":
-        await query.edit_message_text("Введите сообщение для рассылки:\n(Отправьте текст в ответ на это сообщение)")
+    if data == "admin:cancel":
+        await query.edit_message_text("Действие отменено.", reply_markup=build_admin_keyboard())
+        return ConversationHandler.END
+    elif data == "admin:broadcast":
+        await query.edit_message_text("Введите сообщение для рассылки:\n(Введите текст или нажмите /cancel для отмены)")
         return BROADCAST
     elif data == "admin:maintenance":
-        await query.edit_message_text("Введите сообщение о ремонте для рассылки всем пользователям:")
+        await query.edit_message_text("Введите сообщение о ремонте для рассылки всем пользователям:\n(Введите текст или нажмите /cancel для отмены)")
         return MAINTENANCE
     elif data == "admin:dbstats":
-        # Получаем полную информацию из users
         cursor = db.conn.cursor()
         cursor.execute("SELECT * FROM users")
         users_data = cursor.fetchall()
-        # Получаем последние 50 записей из requests
         cursor.execute("SELECT * FROM requests ORDER BY timestamp DESC LIMIT 50")
         requests_data = cursor.fetchall()
         text = "DB Statistics:\n\nUsers:\n"
@@ -96,7 +97,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текст для массовой рассылки."""
+    """Обрабатывает сообщение для рассылки."""
     message_text = update.message.text
     admin_id = update.effective_user.id
     if admin_id not in ADMIN_IDS:
@@ -118,7 +119,7 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def maintenance_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текст для рассылки maintenance-сообщения."""
+    """Обрабатывает сообщение для рассылки maintenance-сообщения."""
     message_text = update.message.text
     admin_id = update.effective_user.id
     if admin_id not in ADMIN_IDS:
@@ -137,6 +138,11 @@ async def maintenance_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error(f"Ошибка отправки maintenance-сообщения пользователю {uid}: {e}")
             continue
     await update.message.reply_text(f"Maintenance сообщение отправлено {success} пользователям.", reply_markup=build_admin_keyboard())
+    return ConversationHandler.END
+
+async def cancel_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик отмены действия админа."""
+    await update.message.reply_text("Действие отменено.", reply_markup=build_admin_keyboard())
     return ConversationHandler.END
 
 async def restart_bot():
@@ -163,6 +169,6 @@ def register_admin_handlers(application):
             BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message)],
             MAINTENANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, maintenance_message)]
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel_admin_action)]
     )
     application.add_handler(conv_handler)
