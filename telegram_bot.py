@@ -22,14 +22,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Укажите TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в файле .env")
 
-# Все запросы отправляем через proxyapi
+# Все запросы через proxyapi
 openai.api_key = OPENAI_API_KEY
 openai.api_base = "https://api.proxyapi.ru/openai/v1"
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Постоянная клавиатура – всегда доступна кнопка для смены настроек
+# Постоянная клавиатура – кнопка для смены настроек
 persistent_keyboard = ReplyKeyboardMarkup(
     [["Сменить настройки"]],
     resize_keyboard=True,
@@ -67,33 +67,64 @@ def transcribe_voice_file(audio_path: str) -> dict:
         response.raise_for_status()
         return response.json()
 
+def build_settings_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    # Читаем выбранные настройки из context.user_data или задаём значения по умолчанию
+    current_model = context.user_data.get("tts_model", "tts-1-hd")
+    current_voice = context.user_data.get("tts_voice", "nova")
+    
+    # Формируем текст кнопок с галочками для выбранных настроек
+    model_btns = [
+        InlineKeyboardButton(
+            f"Model: tts-1 {'✅' if current_model == 'tts-1' else ''}",
+            callback_data="model:tts-1"
+        ),
+        InlineKeyboardButton(
+            f"Model: tts-1-hd {'✅' if current_model == 'tts-1-hd' else ''}",
+            callback_data="model:tts-1-hd"
+        )
+    ]
+    voice_btns = [
+        InlineKeyboardButton(
+            f"Voice: alloy {'✅' if current_voice == 'alloy' else ''}",
+            callback_data="voice:alloy"
+        ),
+        InlineKeyboardButton(
+            f"Voice: echo {'✅' if current_voice == 'echo' else ''}",
+            callback_data="voice:echo"
+        ),
+        InlineKeyboardButton(
+            f"Voice: fable {'✅' if current_voice == 'fable' else ''}",
+            callback_data="voice:fable"
+        ),
+        InlineKeyboardButton(
+            f"Voice: onyx {'✅' if current_voice == 'onyx' else ''}",
+            callback_data="voice:onyx"
+        ),
+        InlineKeyboardButton(
+            f"Voice: nova {'✅' if current_voice == 'nova' else ''}",
+            callback_data="voice:nova"
+        ),
+        InlineKeyboardButton(
+            f"Voice: shimmer {'✅' if current_voice == 'shimmer' else ''}",
+            callback_data="voice:shimmer"
+        ),
+    ]
+    # Можно разбить голосовые кнопки на несколько рядов (например, по 3 кнопки в ряду)
+    voice_rows = [voice_btns[i:i+3] for i in range(0, len(voice_btns), 3)]
+    keyboard = [model_btns] + voice_rows
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "Привет! Я TTS‑бот:\n\n"
-        "• Отправь мне текст или текстовый файл (.txt), и я верну озвучку.\n"
+        "• Отправь текст или текстовый файл (.txt) – я верну озвучку.\n"
         "• Отправь голосовое сообщение – я выполню транскрипцию через Whisper.\n\n"
         "Нажми «Сменить настройки», чтобы выбрать модель и голос."
     )
     await update.message.reply_text(welcome_text, reply_markup=persistent_keyboard)
 
 async def set_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("Model: tts-1", callback_data="model:tts-1"),
-            InlineKeyboardButton("Model: tts-1-hd", callback_data="model:tts-1-hd"),
-        ],
-        [
-            InlineKeyboardButton("Voice: alloy", callback_data="voice:alloy"),
-            InlineKeyboardButton("Voice: echo", callback_data="voice:echo"),
-            InlineKeyboardButton("Voice: fable", callback_data="voice:fable"),
-        ],
-        [
-            InlineKeyboardButton("Voice: onyx", callback_data="voice:onyx"),
-            InlineKeyboardButton("Voice: nova", callback_data="voice:nova"),
-            InlineKeyboardButton("Voice: shimmer", callback_data="voice:shimmer"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = build_settings_keyboard(context)
     await update.message.reply_text("Выберите настройки TTS:", reply_markup=reply_markup)
 
 async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,14 +134,12 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     if data.startswith("model:"):
         model_choice = data.split(":", 1)[1]
         context.user_data["tts_model"] = model_choice
-        text = f"Выбрана модель: {model_choice}"
     elif data.startswith("voice:"):
         voice_choice = data.split(":", 1)[1]
         context.user_data["tts_voice"] = voice_choice
-        text = f"Выбран голос: {voice_choice}"
-    else:
-        text = "Неизвестная настройка."
-    await query.edit_message_text(text=text)
+    # После обновления настроек, обновляем inline клавиатуру с галочками
+    reply_markup = build_settings_keyboard(context)
+    await query.edit_message_text(text="Настройки обновлены:", reply_markup=reply_markup)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -120,7 +149,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.strip().lower() == "сменить настройки":
         await set_settings(update, context)
         return
-
     await update.message.reply_text("Генерирую аудио...", reply_markup=persistent_keyboard)
     tts_model = context.user_data.get("tts_model", "tts-1-hd")
     tts_voice = context.user_data.get("tts_voice", "nova")
@@ -207,7 +235,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    # Обработка текстового сообщения "Сменить настройки" с корректным regex:
+    # Обработка сообщения "Сменить настройки" через regex (с флагом ignore-case)
     application.add_handler(MessageHandler(filters.Regex(r"(?i)^сменить настройки$"), set_settings))
     application.run_polling()
 
