@@ -3,12 +3,19 @@ import tempfile
 import logging
 import requests
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 from dotenv import load_dotenv
-import openai  # для доступа к openai.api_key и openai.api_base
+import openai
 
-# Загрузка переменных окружения
+# Загрузка переменных окружения из .env
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -16,7 +23,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Укажите TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в файле .env")
 
-# Настройка openai (используется только для хранения ключа и base_url)
+# Настройка openai (используется только для ключа и base_url)
 openai.api_key = OPENAI_API_KEY
 openai.api_base = "https://api.proxyapi.ru/openai/v1"
 
@@ -28,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 def generate_tts_audio(model: str, voice: str, input_text: str, instructions: str, audio_path: str):
     """
-    Отправляет POST‑запрос к TTS endpoint и записывает ответ (аудио) в audio_path.
+    Отправляет POST-запрос к TTS-endpoint и сохраняет полученное аудио в audio_path.
     """
     url = f"{openai.api_base}/audio/speech"
     headers = {
@@ -50,31 +57,34 @@ def generate_tts_audio(model: str, voice: str, input_text: str, instructions: st
                 if chunk:
                     f.write(chunk)
 
-def transcribe_voice_file(audio_path: str) -> dict:
-    """
-    Отправляет аудиофайл для транскрипции через Whisper.
-    """
-    url = f"{openai.api_base}/audio/transcribe"
-    headers = {
-        "Authorization": f"Bearer {openai.api_key}",
-    }
-    data = {
-        "model": "whisper-1"
-    }
-    with open(audio_path, "rb") as audio_file:
-        files = {"file": audio_file}
-        response = requests.post(url, headers=headers, data=data, files=files)
-        response.raise_for_status()
-        return response.json()
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "Привет! Я TTS‑бот:\n\n"
         "• Отправь мне текст или текстовый файл (.txt), и я верну озвучку.\n"
-        "• Отправь голосовое сообщение, и я транскрибирую его с помощью Whisper.\n\n"
+        "• Отправь голосовое сообщение — транскрипция временно недоступна.\n\n"
+        "Используй команду /model, чтобы выбрать модель TTS (tts-1 или tts-1-hd).\n\n"
         "Просто отправьте сообщение!"
     )
     await update.message.reply_text(welcome_text)
+
+async def set_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("tts-1", callback_data="model:tts-1"),
+            InlineKeyboardButton("tts-1-hd", callback_data="model:tts-1-hd"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Выберите модель для TTS:", reply_markup=reply_markup)
+
+async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # например, "model:tts-1-hd"
+    if data.startswith("model:"):
+        model_choice = data.split(":", 1)[1]
+        context.user_data["tts_model"] = model_choice
+        await query.edit_message_text(text=f"Вы выбрали модель: {model_choice}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -83,17 +93,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("Генерирую аудио...")
+    # Получаем выбранную модель из данных пользователя, по умолчанию "tts-1-hd"
+    tts_model = context.user_data.get("tts_model", "tts-1-hd")
+    voice = "nova"  # зафиксированный голос (можно добавить выбор)
+    instructions = ""  # можно добавить поле для инструкций
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tf:
         audio_path = tf.name
 
     try:
         generate_tts_audio(
-            model="tts-1-hd",  # или "tts-1"
-            voice="nova",      # варианты: alloy, echo, fable, onyx, nova, shimmer
+            model=tts_model,
+            voice=voice,
             input_text=text,
-            instructions="",
-            audio_path=audio_path
+            instructions=instructions,
+            audio_path=audio_path,
         )
         with open(audio_path, "rb") as audio_file:
             await update.message.reply_audio(audio=audio_file)
@@ -119,16 +133,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f.read()
 
         await update.message.reply_text("Генерирую аудио из файла...")
-
+        tts_model = context.user_data.get("tts_model", "tts-1-hd")
+        voice = "nova"
+        instructions = ""
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tf_audio:
             audio_path = tf_audio.name
 
         generate_tts_audio(
-            model="tts-1-hd",
-            voice="nova",
+            model=tts_model,
+            voice=voice,
             input_text=text,
-            instructions="",
-            audio_path=audio_path
+            instructions=instructions,
+            audio_path=audio_path,
         )
         with open(audio_path, "rb") as audio_file:
             await update.message.reply_audio(audio=audio_file)
@@ -142,30 +158,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(audio_path)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    voice = update.message.voice
-    if not voice:
-        await update.message.reply_text("Голосовое сообщение не найдено.")
-        return
-
-    file = await voice.get_file()
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tf:
-            voice_path = tf.name
-        await file.download_to_drive(custom_path=voice_path)
-
-        transcript = transcribe_voice_file(voice_path)
-        await update.message.reply_text("Транскрипция:\n" + transcript.get("text", "Нет текста"))
-    except Exception as e:
-        logger.error("Ошибка при транскрипции голосового сообщения: %s", e)
-        await update.message.reply_text("Ошибка при транскрипции голосового сообщения: " + str(e))
-    finally:
-        if os.path.exists(voice_path):
-            os.remove(voice_path)
+    # Транскрипция голосовых сообщений временно недоступна
+    await update.message.reply_text("Транскрипция голосовых сообщений временно недоступна.")
 
 def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("model", set_model))
+    application.add_handler(CallbackQueryHandler(handle_model_callback, pattern="^model:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
