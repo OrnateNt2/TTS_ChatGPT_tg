@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+activity.db
 *.mp3
 *.ogg
 venv

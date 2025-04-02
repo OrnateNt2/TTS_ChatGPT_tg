@@ -13,8 +13,8 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 import openai
+import db
 
-# Загрузка переменных окружения из .env
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -22,14 +22,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Укажите TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в файле .env")
 
-# Все запросы через proxyapi
 openai.api_key = OPENAI_API_KEY
 openai.api_base = "https://api.proxyapi.ru/openai/v1"
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Постоянная клавиатура – кнопка для смены настроек
 persistent_keyboard = ReplyKeyboardMarkup(
     [["Сменить настройки"]],
     resize_keyboard=True,
@@ -42,14 +40,9 @@ def generate_tts_audio(model: str, voice: str, input_text: str, instructions: st
         "Authorization": f"Bearer {openai.api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": model,
-        "voice": voice,
-        "input": input_text,
-    }
+    payload = {"model": model, "voice": voice, "input": input_text}
     if instructions:
         payload["instructions"] = instructions
-
     with requests.post(url, headers=headers, json=payload, stream=True) as r:
         r.raise_for_status()
         with open(audio_path, "wb") as f:
@@ -68,17 +61,12 @@ def transcribe_voice_file(audio_path: str) -> dict:
         return response.json()
 
 def build_settings_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    # Читаем выбранные настройки из context.user_data или задаём значения по умолчанию
     current_model = context.user_data.get("tts_model", "tts-1-hd")
     current_voice = context.user_data.get("tts_voice", "nova")
-    
-    # Кнопки для выбора модели (короткие надписи)
     model_buttons = [
         InlineKeyboardButton(f"tts-1{' ✅' if current_model == 'tts-1' else ''}", callback_data="model:tts-1"),
         InlineKeyboardButton(f"tts-1-hd{' ✅' if current_model == 'tts-1-hd' else ''}", callback_data="model:tts-1-hd")
     ]
-    
-    # Кнопки для выбора голоса (просто название голоса)
     voice_buttons = [
         InlineKeyboardButton(f"alloy{' ✅' if current_voice == 'alloy' else ''}", callback_data="voice:alloy"),
         InlineKeyboardButton(f"echo{' ✅' if current_voice == 'echo' else ''}", callback_data="voice:echo"),
@@ -87,12 +75,9 @@ def build_settings_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboar
         InlineKeyboardButton(f"nova{' ✅' if current_voice == 'nova' else ''}", callback_data="voice:nova"),
         InlineKeyboardButton(f"shimmer{' ✅' if current_voice == 'shimmer' else ''}", callback_data="voice:shimmer")
     ]
-    
-    # Группируем кнопки голосов в два ряда по 3 кнопки
     voice_rows = [voice_buttons[i:i+3] for i in range(0, len(voice_buttons), 3)]
     keyboard = [model_buttons] + voice_rows
     return InlineKeyboardMarkup(keyboard)
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -101,6 +86,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Отправь голосовое сообщение – я выполню транскрипцию через Whisper.\n\n"
         "Нажми «Сменить настройки», чтобы выбрать модель и голос."
     )
+    user = update.message.from_user
+    db.add_or_update_user(user.id, user.username, user.first_name, user.last_name)
     await update.message.reply_text(welcome_text, reply_markup=persistent_keyboard)
 
 async def set_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,16 +99,15 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     data = query.data
     if data.startswith("model:"):
-        model_choice = data.split(":", 1)[1]
-        context.user_data["tts_model"] = model_choice
+        context.user_data["tts_model"] = data.split(":", 1)[1]
     elif data.startswith("voice:"):
-        voice_choice = data.split(":", 1)[1]
-        context.user_data["tts_voice"] = voice_choice
-    # После обновления настроек, обновляем inline клавиатуру с галочками
+        context.user_data["tts_voice"] = data.split(":", 1)[1]
     reply_markup = build_settings_keyboard(context)
     await query.edit_message_text(text="Настройки обновлены:", reply_markup=reply_markup)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    db.add_or_update_user(user.id, user.username, user.first_name, user.last_name)
     text = update.message.text
     if not text or text.strip() == "":
         await update.message.reply_text("Пожалуйста, отправьте текст.", reply_markup=persistent_keyboard)
@@ -145,6 +131,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         with open(audio_path, "rb") as audio_file:
             await update.message.reply_audio(audio=audio_file, reply_markup=persistent_keyboard)
+        db.log_request(user.id, "TTS", model_used=tts_model, voice_used=tts_voice)
     except Exception as e:
         logger.error("Ошибка при генерации аудио: %s", e)
         await update.message.reply_text("Ошибка при генерации аудио: " + str(e), reply_markup=persistent_keyboard)
@@ -153,6 +140,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(audio_path)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    db.add_or_update_user(user.id, user.username, user.first_name, user.last_name)
     document = update.message.document
     if not document:
         await update.message.reply_text("Документ не найден.", reply_markup=persistent_keyboard)
@@ -179,6 +168,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         with open(audio_path, "rb") as audio_file:
             await update.message.reply_audio(audio=audio_file, reply_markup=persistent_keyboard)
+        db.log_request(user.id, "File", model_used=tts_model, voice_used=tts_voice)
     except Exception as e:
         logger.error("Ошибка при обработке файла: %s", e)
         await update.message.reply_text("Ошибка при обработке файла: " + str(e), reply_markup=persistent_keyboard)
@@ -189,6 +179,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(audio_path)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    db.add_or_update_user(user.id, user.username, user.first_name, user.last_name)
     voice = update.message.voice
     if not voice:
         await update.message.reply_text("Голосовое сообщение не найдено.", reply_markup=persistent_keyboard)
@@ -200,6 +192,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(custom_path=voice_path)
         transcript = transcribe_voice_file(voice_path)
         await update.message.reply_text(transcript.get("text", "Нет текста"), reply_markup=persistent_keyboard)
+        # Для голосовых запросов можно логировать, передав настройки, если нужно.
+        db.log_request(user.id, "Voice", model_used=context.user_data.get("tts_model"), voice_used=context.user_data.get("tts_voice"))
     except Exception as e:
         logger.error("Ошибка при транскрипции голосового сообщения: %s", e)
         await update.message.reply_text("Ошибка при транскрипции голосового сообщения: " + str(e), reply_markup=persistent_keyboard)
@@ -215,7 +209,6 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    # Обработка сообщения "Сменить настройки" через regex (с флагом ignore-case)
     application.add_handler(MessageHandler(filters.Regex(r"(?i)^сменить настройки$"), set_settings))
     application.run_polling()
 
