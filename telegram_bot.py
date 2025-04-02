@@ -2,6 +2,7 @@ import os
 import tempfile
 import logging
 import requests
+import traceback
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -14,20 +15,26 @@ from telegram.ext import (
 from dotenv import load_dotenv
 import openai
 import db
+import admin
 
+# Загружаем переменные окружения
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")  # Например, "548028141"
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Укажите TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в файле .env")
 
+# Настраиваем OpenAI
 openai.api_key = OPENAI_API_KEY
 openai.api_base = "https://api.proxyapi.ru/openai/v1"
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
+# Постоянная клавиатура – кнопка для смены настроек
 persistent_keyboard = ReplyKeyboardMarkup(
     [["Сменить настройки"]],
     resize_keyboard=True,
@@ -79,7 +86,17 @@ def build_settings_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboar
     keyboard = [model_buttons] + voice_rows
     return InlineKeyboardMarkup(keyboard)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_startup_message(application: Application):
+    """Отправляет сообщение администратору при запуске бота."""
+    try:
+        # Берем первый ID из ADMIN_IDS
+        admin_ids = [int(x.strip()) for x in ADMIN_IDS_STR.split(",") if x.strip()]
+        if admin_ids:
+            await application.bot.send_message(chat_id=admin_ids[0], text="Бот запущен.")
+    except Exception as e:
+        logger.error("Ошибка отправки сообщения администратору при запуске: %s", e)
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "Привет! Я TTS‑бот:\n\n"
         "• Отправь текст или текстовый файл (.txt) – я верну озвучку.\n"
@@ -192,7 +209,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(custom_path=voice_path)
         transcript = transcribe_voice_file(voice_path)
         await update.message.reply_text(transcript.get("text", "Нет текста"), reply_markup=persistent_keyboard)
-        # Для голосовых запросов можно логировать, передав настройки, если нужно.
         db.log_request(user.id, "Voice", model_used=context.user_data.get("tts_model"), voice_used=context.user_data.get("tts_voice"))
     except Exception as e:
         logger.error("Ошибка при транскрипции голосового сообщения: %s", e)
@@ -201,15 +217,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(voice_path):
             os.remove(voice_path)
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик ошибок: логирует исключение и отправляет traceback администратору."""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+    message = f"An exception occurred:\n{tb_string}"
+    try:
+        admin_ids = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+        for admin_id in admin_ids:
+            await context.bot.send_message(chat_id=admin_id, text=message)
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение об ошибке администратору: {e}")
+
 def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
+    
+    # Регистрируем админ-обработчики первыми
+    admin.register_admin_handlers(application)
+    
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("model", set_settings))
     application.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^(model:|voice:)"))
+    application.add_handler(MessageHandler(filters.Regex(r"(?i)^сменить настройки$"), set_settings))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    application.add_handler(MessageHandler(filters.Regex(r"(?i)^сменить настройки$"), set_settings))
+    
+    application.add_error_handler(error_handler)
+    
     application.run_polling()
 
 if __name__ == '__main__':
