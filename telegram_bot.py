@@ -72,47 +72,27 @@ def build_settings_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboar
     current_model = context.user_data.get("tts_model", "tts-1-hd")
     current_voice = context.user_data.get("tts_voice", "nova")
     
-    # Формируем текст кнопок с галочками для выбранных настроек
-    model_btns = [
-        InlineKeyboardButton(
-            f"Model: tts-1 {'✅' if current_model == 'tts-1' else ''}",
-            callback_data="model:tts-1"
-        ),
-        InlineKeyboardButton(
-            f"Model: tts-1-hd {'✅' if current_model == 'tts-1-hd' else ''}",
-            callback_data="model:tts-1-hd"
-        )
+    # Кнопки для выбора модели (короткие надписи)
+    model_buttons = [
+        InlineKeyboardButton(f"tts-1{' ✅' if current_model == 'tts-1' else ''}", callback_data="model:tts-1"),
+        InlineKeyboardButton(f"tts-1-hd{' ✅' if current_model == 'tts-1-hd' else ''}", callback_data="model:tts-1-hd")
     ]
-    voice_btns = [
-        InlineKeyboardButton(
-            f"Voice: alloy {'✅' if current_voice == 'alloy' else ''}",
-            callback_data="voice:alloy"
-        ),
-        InlineKeyboardButton(
-            f"Voice: echo {'✅' if current_voice == 'echo' else ''}",
-            callback_data="voice:echo"
-        ),
-        InlineKeyboardButton(
-            f"Voice: fable {'✅' if current_voice == 'fable' else ''}",
-            callback_data="voice:fable"
-        ),
-        InlineKeyboardButton(
-            f"Voice: onyx {'✅' if current_voice == 'onyx' else ''}",
-            callback_data="voice:onyx"
-        ),
-        InlineKeyboardButton(
-            f"Voice: nova {'✅' if current_voice == 'nova' else ''}",
-            callback_data="voice:nova"
-        ),
-        InlineKeyboardButton(
-            f"Voice: shimmer {'✅' if current_voice == 'shimmer' else ''}",
-            callback_data="voice:shimmer"
-        ),
+    
+    # Кнопки для выбора голоса (просто название голоса)
+    voice_buttons = [
+        InlineKeyboardButton(f"alloy{' ✅' if current_voice == 'alloy' else ''}", callback_data="voice:alloy"),
+        InlineKeyboardButton(f"echo{' ✅' if current_voice == 'echo' else ''}", callback_data="voice:echo"),
+        InlineKeyboardButton(f"fable{' ✅' if current_voice == 'fable' else ''}", callback_data="voice:fable"),
+        InlineKeyboardButton(f"onyx{' ✅' if current_voice == 'onyx' else ''}", callback_data="voice:onyx"),
+        InlineKeyboardButton(f"nova{' ✅' if current_voice == 'nova' else ''}", callback_data="voice:nova"),
+        InlineKeyboardButton(f"shimmer{' ✅' if current_voice == 'shimmer' else ''}", callback_data="voice:shimmer")
     ]
-    # Можно разбить голосовые кнопки на несколько рядов (например, по 3 кнопки в ряду)
-    voice_rows = [voice_btns[i:i+3] for i in range(0, len(voice_btns), 3)]
-    keyboard = [model_btns] + voice_rows
+    
+    # Группируем кнопки голосов в два ряда по 3 кнопки
+    voice_rows = [voice_buttons[i:i+3] for i in range(0, len(voice_buttons), 3)]
+    keyboard = [model_buttons] + voice_rows
     return InlineKeyboardMarkup(keyboard)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
